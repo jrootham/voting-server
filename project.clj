@@ -13,13 +13,7 @@
 				[org.clojure/java.jdbc "0.7.1"]
 				[org.clojure/data.json "0.2.6"]
      ]
-  :main ^:skip-aot voting.core
-  :aot [voting.core]
+  :main ^:skip-aot voting_server.core
+  :aot [voting_server.core]
   :target-path "target/%s"
-  :profiles 
-    {
-      :uberjar {:aot :all}
-      :test-jar {:uberjar-name "cabal-voting-test.jar"}
-      :prod-jar {:uberjar-name "cabal-voting.jar"}
-    }
 )

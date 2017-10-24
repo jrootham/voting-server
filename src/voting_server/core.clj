@@ -1,4 +1,4 @@
-(ns voting.core
+(ns voting_server.core
   (:gen-class)
 	(:require [ring.middleware.cors :refer [wrap-cors]])
 	(:use ring.adapter.jetty)
@@ -230,26 +230,11 @@
 	(output (close (vote (paper (login request)))))
 )
 
-(defn get-uri [db-name]
-	(let
-		[
-	 		_ (println "user:")
-	  		user (read-line)
-	 		_ (println "database password:")
-	  		password (read-line)
-	  		db-password (str/replace password " " "+")
-		]
-		(str "jdbc:postgresql://localhost:5432/" db-name "?user=" user "&password=" db-password)
-	)
-)
-
-(defn make-wrap-db [db-name]
-	(let [uri (get-uri db-name)]
-		(fn [handler]  
-			(fn [req]    
-				(with-db-connection [db {:connection-uri uri}]      
-					(handler (assoc req :connection db))
-				)
+(defn make-wrap-db [db-url]
+	(fn [handler]  
+		(fn [req]   
+			(with-db-connection [db {:connection-uri db-url}]      
+				(handler (assoc req :connection db))
 			)
 		)
 	)
@@ -259,8 +244,8 @@
   (wrap-cors handler :access-control-allow-origin [#".*"]
                      :access-control-allow-methods [:post]))
 
-(defn make-handler [db-name] 
-	(let [wrap-db (make-wrap-db db-name)] 
+(defn make-handler [db-url] 
+	(let [wrap-db (make-wrap-db db-url)] 
 		(cors (wrap-json-response (wrap-json-body (wrap-db pipeline))))
 	)
 )
@@ -268,14 +253,11 @@
 (defn -main
   	"Cabal voting server"
   	[& args]
-  	(if (= 2 (count args))
-	  	(let 
-	  		[
-	  			port (Integer/parseInt (first args)) 
-	  			db-name (second args)
-	  		]
-			(run-jetty (make-handler db-name) {:port port})  	
-	  	)
-	  (println "Usage: java -jar uberjar port dbname")
+  	(if (= 0 (count args))
+		(
+			run-jetty (make-handler (System/getenv "DATABASE_URL")) 
+				{:port (Integer/parseInt(System/getenv "PORT"))}
+		)  	
+	  	(println "There are no arguments")
 	)
  )
