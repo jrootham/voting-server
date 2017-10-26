@@ -256,7 +256,7 @@
   	[& args]
   	(if (= 0 (count args))
 		(
-			run-jetty (make-handler (System/getenv "DATABASE_URL")) 
+			run-jetty (make-handler (System/getenv "JDBC_DATABASE_URL")) 
 				{:port (Integer/parseInt(System/getenv "PORT"))}
 		)  	
 	  	(println "There are no arguments")
