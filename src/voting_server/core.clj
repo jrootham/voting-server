@@ -219,7 +219,7 @@
 					user-id (get request :user_id)
 					paper-id (get body "paper_id")
 				]
-				(update! db :papers {:open_paper 0} ["paper_id = ?" paper-id])
+				(update! db :papers {:open_paper false} ["paper_id = ?" paper-id])
 			)
 		)
 	)
