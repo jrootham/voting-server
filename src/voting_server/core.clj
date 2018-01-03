@@ -1,29 +1,40 @@
 (ns voting_server.core
   (:gen-class)
-	(:require [ring.middleware.cors :refer [wrap-cors]])
+	(:require [com.unbounce.encors :refer [wrap-cors]])
 	(:use ring.adapter.jetty)
 	(:require [ring.middleware.json :refer [wrap-json-response wrap-json-body]]
          [ring.util.response :refer [response]])
+	(:require [ring.middleware.session :refer[wrap-session]])
+	(:require [compojure.core :refer :all])
 	(:require [clojure.java.jdbc :refer :all :as jdbc])
 	(:use clojure.java.jdbc)
 	(:require [clojure.string :as str])
+	(:require [ring-debug-logging.core :refer [wrap-with-logger]])
+)
+
+(defn get-owner [db paper-id]
+	(let [query-string "SELECT user_id FROM papers WHERE paper_id=?"]
+		(get (first (query db [query-string paper-id])) :user_id)
+	)
+)
+
+(defn get-new-id[result]
+	(second (first (first result)))
+)
+
+(defn return-error [message]
+	{:status 400 :body message}
 )
 
 (defn make-empty [text]
 	(if text text "")
 )
 
-(defn login [request]
-	(let [
-		body (get request :body)		
-		db (get request :connection)
-		nameValue (get body "user")
-		result (query db ["SELECT user_id FROM users WHERE name =? AND valid" nameValue])
-		]
-
-		(if (= 1 (count result))
-			(let [row (first result)] (assoc request :user_id (get row :user_id)))
-			(assoc (assoc request :user_id nil) :error "User invalid")
+(defn get-user [db nameValue]
+	(let [result (query db ["SELECT user_id,admin FROM users WHERE name =? AND valid;" nameValue])]
+		(if (== 1 (count result))
+			(first result)
+			nil
 		)
 	)
 )
@@ -80,61 +91,117 @@
 	)
 )
 
-(defn get-paper-list [request] 
+(defn get-paper-list [db] 
 	(let [
-		body (get request :body)		
-		db (get request :connection)
-		columns "paper_id, title, link_id, paper_comment, created_at, users.name AS submitter"
-		from " FROM papers JOIN users ON papers.user_id = users.user_id"
-		query-string (str "SELECT " columns from " WHERE open_paper	;")
-		result (query db [query-string])
-		map-fn (make-paper-apply db)
+			columns "paper_id, title, link_id, paper_comment, created_at, users.name AS submitter"
+			from " FROM papers JOIN users ON papers.user_id = users.user_id"
+			query-string (str "SELECT " columns from " WHERE open_paper	;")
+			result (query db [query-string])
+			map-fn (make-paper-apply db)
 		]
 		(doall(map map-fn result))
 	)
 )
 
-(defn make-body [request]
-	(if (contains? request :error) 
-		{:error (get request :error), :paper_list (list)} 
-		{:error "", :paper_list (get-paper-list request)}
+(defn reload [db]
+	{:body {:paper_list (get-paper-list db)}}
+)
+
+(defn total-votes [db user-id]
+	(let
+		[
+			column "SUM(votes.votes) AS total_votes "
+			tables "papers JOIN votes ON papers.paper_id=votes.paper_id "
+			where "papers.open_paper AND votes.user_id=?;"
+			query-string (str "SELECT " column "FROM " tables "WHERE " where)
+			count-list (query db [query-string user-id])
+			vote-count (get (first count-list) :total_votes)
+		]
+
+		(if (some? vote-count)
+			vote-count
+			0
+		)
 	)
 )
 
-(defn output [request]
-	{
-		:status 200
-		:headers {"Content-Type" "application/json"}
-		:body (make-body request)
-	}
+(defn cast-new-vote [db user-id paper-id]
+	(insert! db :votes {:paper_id paper-id, :user_id user-id, :votes 1})
+	(reload db)
 )
 
-(defn vote [request]
-	(let [
-		body (get request :body)
-		db (get request :connection)
-	]
-		(if (contains? body "increment")
-			(let
-				[
-					user-id (get request :user_id)
-					paper-id (get body "paper_id")
-					increment (get body "increment")
-					where "user_id=? AND paper_id=?"
-					result (query db [(str "SELECT votes FROM votes WHERE " where ";") user-id paper-id])
-				]
-				(if (== 0 (count result))
-					(insert! db :votes {:paper_id paper-id, :user_id user-id, :votes 1})
-					(update! db :votes {:votes (+ increment (get (first result) :votes))} [where user-id paper-id])
+(defn cast-vote [db user-id paper-id votes]
+	(update! db :votes {:votes (+ votes 1)} ["user_id=? AND paper_id=?" user-id paper-id])
+	(reload db)
+)
+
+(defn uncast-vote [db user-id paper-id votes]
+	(update! db :votes {:votes (- votes 1)} ["user_id=? AND paper_id=?" user-id paper-id])
+	(reload db)
+)
+
+(defn get-vote-entry [db user-id paper-id]
+	(let
+		[
+			where "user_id=? AND paper_id=?"
+			vote-query (str "SELECT votes FROM votes WHERE " where ";")
+		]
+		(query db [vote-query user-id paper-id])
+	)
+)
+
+(defn vote-for-paper [db user-id paper-id]
+	(let
+		[
+			max-query "SELECT max_votes_per_paper FROM config WHERE config_id=1;"
+			max-per-paper (get (first (query db [max-query])) :max_votes_per_paper)
+
+			vote-entry (get-vote-entry db user-id paper-id)
+		]
+		(if (== (count vote-entry) 0)
+			(cast-new-vote db user-id paper-id)
+			(let [votes (get (first vote-entry) :votes)]
+				(if (< votes max-per-paper)
+					(cast-vote db user-id paper-id votes)
+					(return-error "User has no votes left for this paper")
 				)
 			)
 		)
-	)	
-	request
+	)
 )
 
-(defn get-new-id[result]
-	(second (first (first result)))
+(defn unvote [db user-id paper-id]
+	(if (some? user-id)
+		(let [vote-entry (get-vote-entry db user-id paper-id)]
+			(if (> (count vote-entry) 0)
+				(let [votes (get (first vote-entry) :votes)]
+					(if (> votes 0)
+						(uncast-vote db user-id paper-id votes)
+						(return-error "Cannot reduce votes to less than 0")
+					)
+				)
+				(return-error "Cannot reduce votes to less than 0")
+			)
+		)
+		(return-error  "User id not found")
+	)
+)
+
+(defn vote [db user-id paper-id]
+	(if (some? user-id)
+		(let 
+			[
+				max-query "SELECT max_votes FROM config WHERE config_id=1;"
+				max (get (first (query db [max-query])) :max_votes)
+			]
+
+			(if (> max (total-votes db user-id))
+				(vote-for-paper db user-id paper-id)
+				(return-error "User has voted for too many papers")
+			)
+		)
+		(return-error  "User id not found")
+	)
 )
 
 (defn make-add-reference [db paper-id]
@@ -149,11 +216,11 @@
 	)
 )
 
-(defn add_reference-list [db paper-id reference-list]
+(defn add-reference-list [db paper-id reference-list]
 	(doall(map (make-add-reference db paper-id) reference-list))
 )
 
-(defn add-paper [db user-id paper]
+(defn add-a-paper [db user-id paper]
 	(let [
 			link-id (get-new-id (insert! db :links (get paper "paper")))
 			paper-record 
@@ -165,69 +232,133 @@
 				}
 		]
 			
-		(add_reference-list db (get-new-id (insert! db :papers paper-record)) (get paper "references"))
-	)	
+		(add-reference-list db (get-new-id (insert! db :papers paper-record)) (get paper "references"))
+	)
+
+	(reload db)
 )
 
-(defn update-paper [db user-id paper]
-	(let [
-			paper-id (get paper "paper_id")
-			query-string "SELECT link_id FROM papers WHERE paper_id=?"
-			old-link-id (get (first (query db [query-string paper-id])) :link_id)
-			new-link-id (get-new-id (insert! db :links (get paper "paper")))
-			paper-record 
-				{
-					,"title" (get paper "title")
-					, "link_id" new-link-id
-					, "paper_comment" (make-empty (get paper "comment"))
-				}
+(defn can-add-paper [db user-id]
+	(let 
+		[
+			count-query "SELECT COUNT(*) AS paper_count FROM papers WHERE open_paper AND user_id=?;"
+			paper-count (get (first (query db [count-query user-id])) :paper_count)
+			max-query "SELECT max_papers FROM config WHERE config_id=1;"
+			max (get (first (query db [max-query])) :max_papers)
 		]
+		(< paper-count max)
+	)
+)
+
+(defn add-paper [db user-id paper]
+	(if (can-add-paper db user-id)
+		(add-a-paper db user-id paper)
+		(return-error "User cannot add any more papers")
+	)
+)
+
+(defn update-a-paper [db paper-id paper]
+	(let 
+	[
+		query-string "SELECT link_id FROM papers WHERE paper_id=?"
+		old-link-id (get (first (query db [query-string paper-id])) :link_id)
+		new-link-id (get-new-id (insert! db :links (get paper "paper")))
+		paper-record 
+			{
+				,"title" (get paper "title")
+				, "link_id" new-link-id
+				, "paper_comment" (make-empty (get paper "comment"))
+			}
+	]
 
 		(update! db :papers paper-record ["paper_id = ?" paper-id])
 		(delete! db :links ["link_id = ?" old-link-id])
 		(delete! db :comment_references ["paper_id = ?" paper-id])
-		(add_reference-list db paper-id (get paper "references"))
+		(add-reference-list db paper-id (get paper "references"))
+
+		(reload db)
 	)	
 )
 
-(defn paper [request]
-	(let [
-		body (get request :body)
-		db (get request :connection)
-	]
-		(if (contains? body "paper")
-			(let [paper (get body "paper") ]
-				(if (== (get paper "paper_id") 0)
-					(add-paper db (get request :user_id) paper)
-					(update-paper db (get request :user_id) paper)
-				)
-			)
-		)
+(defn update-paper [db user-id paper-id paper]
+	(if (== (get-owner db paper-id) user-id)
+		(update-a-paper db paper-id paper)
+		(return-error "User did not submit paper")
 	)
-	
-	request
 )
 
-(defn close [request]
-	(let [
-		body (get request :body)
-		db (get request :connection)
-	]
-		(if (contains? body "close")
-			(let
-				[
-					user-id (get request :user_id)
-					paper-id (get body "paper_id")
-				]
-				(update! db :papers {:open_paper false} ["paper_id = ?" paper-id])
+(defn edit-paper [db user-id paper]
+	(println user-id paper)
+	(if (some? user-id)
+		(let [paper-id (get paper "paper_id")]
+			(if (== paper-id 0)
+				(add-paper db user-id paper)
+				(update-paper db user-id paper-id paper)
 			)
 		)
+		(return-error  "User id not found")
 	)
-	request
 )
 
-(defn pipeline [request]
-	(output (close (vote (paper (login request)))))
+(defn close-paper [db paper-id]
+	(update! db :papers {:open_paper false} ["paper_id = ?" paper-id])
+	(reload db)
+)
+
+(defn close [db user-id paper-id]
+	(if (some? user-id)
+		(if (== (get-owner db paper-id) user-id)
+			(close-paper db paper-id)
+			(return-error  "User did not submit paper")
+		)
+		(return-error  "User id not found")
+	)
+)
+
+(defn login [db user-name]
+	(let 
+		[
+			user (get-user db user-name)
+			admin (get user :admin)
+		]
+		(if (some? user)
+			{:body {:admin admin} :session user}
+			(return-error "Invalid user")
+		)
+	)
+)
+
+(defn rules [db]
+	(let 
+		[
+			columns "max_papers,max_votes,max_votes_per_paper"
+			query-string (str "SELECT " columns " FROM config WHERE config_id=1")
+			record (first (query db [query-string]))
+		]
+		{:body record}
+	)
+)
+
+(defroutes voting
+	(POST "/rules" [:as {db :connection}] (rules db))
+
+	(POST "/login" [:as {db :connection {user "user"} :body}] (login db user))
+
+	(POST "/reload" [:as {db :connection}] (reload db))
+
+	(POST "/save" [:as {db :connection {paper "paper"} :body {user-id :user_id} :session}] 
+		(edit-paper db user-id paper))
+
+	(POST "/vote" [:as {db :connection {paper-id "paper_id"} :body {user-id :user_id} :session}] 
+		(vote db user-id paper-id))
+
+	(POST "/unvote" [:as {db :connection {paper-id "paper_id"} :body {user-id :user_id} :session}] 
+		(unvote db user-id paper-id))
+
+	(POST "/close" [:as {db :connection {paper-id "paper_id"} :body {user-id :user_id} :session}] 
+		(close db user-id paper-id))
+
+;	(POST "/permissions" [:as {{admin :admin} :session}] (permissions admin))
 )
 
 (defn make-wrap-db [db-url]
@@ -241,23 +372,63 @@
 )
 
 (defn cors [handler]
-  (wrap-cors handler :access-control-allow-origin [#".*"]
-                     :access-control-allow-methods [:post]))
+	(let [cors-policy
+		    { 
+		    	:allowed-origins :match-origin
+				:allowed-methods #{:post}
+				:request-headers #{"Accept" "Content-Type" "Origin"}
+				:exposed-headers nil
+				:allow-credentials? true
+				:origin-varies? false
+				:max-age nil
+				:require-origin? true
+				:ignore-failures? false
+		    }
+     	]
+
+     	(wrap-cors handler cors-policy)
+     )
+)
 
 (defn make-handler [db-url] 
 	(let [wrap-db (make-wrap-db db-url)] 
-		(cors (wrap-json-response (wrap-json-body (wrap-db pipeline))))
+		(-> voting
+			(wrap-db)
+			(wrap-json-body)
+			(wrap-json-response)
+			(wrap-session)
+			(cors)
+			(wrap-with-logger)
+		)
+	)
+)
+
+(defn get-env [name]
+	(let [value (System/getenv name)]
+		(if (nil? value)
+			(println (str "Evironment variable " name " is undefined"))
+		)
+		value
 	)
 )
 
 (defn -main
   	"Cabal voting server"
   	[& args]
-  	(if (= 0 (count args))
-		(
-			run-jetty (make-handler (System/getenv "JDBC_DATABASE_URL")) 
-				{:port (Integer/parseInt(System/getenv "PORT"))}
+  	(if (== 0 (count args))
+		(let [url (get-env "JDBC_DATABASE_URL") 
+				portString (get-env "PORT")]
+			(if (and (some? url) (some? portString))
+				(try
+					(let [port (Integer/parseInt portString)]
+						(run-jetty (make-handler url) {:port port})
+					)
+					(catch NumberFormatException exception 
+						(println (str portString " is not an int"))
+					)
+				)
+			)
 		)  	
-	  	(println "There are no arguments")
+	  	(println "This programme has no arguments")
 	)
  )
