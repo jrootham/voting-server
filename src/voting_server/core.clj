@@ -334,8 +334,10 @@
 			query-string (str "SELECT " columns " FROM config WHERE config_id=1")
 			record (first (query db [query-string]))
 		]
-		{:body record}
+;		{:body record}
+{:body "In rules"}
 	)
+}
 )
 
 (defn return-user-list [db]
