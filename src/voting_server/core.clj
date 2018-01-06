@@ -288,7 +288,6 @@
 )
 
 (defn edit-paper [db user-id paper]
-	(println user-id paper)
 	(if (some? user-id)
 		(let [paper-id (get paper "paper_id")]
 			(if (== paper-id 0)
@@ -311,7 +310,7 @@
 			(close-paper db paper-id)
 			(return-error  "User did not submit paper")
 		)
-		(return-error  "User id not found")
+		(return-error  "Session not found")
 	)
 )
 
@@ -339,6 +338,57 @@
 	)
 )
 
+(defn return-user-list [db]
+	{:body {:user_list (query db ["SELECT user_id,name,valid,admin FROM users"])}}
+)
+
+(defn user-list [db admin]
+	(if (some? admin)
+		(if admin
+			(return-user-list db)
+			(return-error "User not an administrator")
+		)
+		(return-error  "Session not found")
+	)
+)
+
+(defn add-user [db user-record]
+	(insert! db :users user-record)
+	(return-user-list db)
+)
+
+(defn change-user [db user-id user-record]
+	(update! db :users user-record ["user_id=?" user-id])
+	(return-user-list db)
+)
+
+(defn make-user-record [user]
+	{
+		:name (get user "name")
+		:admin (get user "admin")
+		:valid (get user "valid")
+	}
+)
+
+(defn edit-user [db user]
+	(let [user-id (get user "user_id")]
+		(if (= user-id 0)
+			(add-user db (make-user-record user))
+			(change-user db user-id (make-user-record user))
+		)
+	)
+)
+
+(defn update-user [db admin user]
+	(if (some? admin)
+		(if admin
+			(edit-user db user)
+			(return-error "User not an administrator")
+		)
+		(return-error  "Session not found")
+	)
+)
+
 (defroutes voting
 	(POST "/rules" [:as {db :connection}] (rules db))
 
@@ -358,7 +408,10 @@
 	(POST "/close" [:as {db :connection {paper-id "paper_id"} :body {user-id :user_id} :session}] 
 		(close db user-id paper-id))
 
-;	(POST "/permissions" [:as {{admin :admin} :session}] (permissions admin))
+	(POST "/userList" [:as {db :connection {admin :admin} :session}] (user-list db admin))
+
+	(POST "/updateUser" [:as {db :connection {user "user"} :body {admin :admin} :session}] 
+		(update-user db admin user))
 )
 
 (defn make-wrap-db [db-url]
@@ -398,7 +451,6 @@
 			(wrap-json-response)
 			(wrap-session)
 			(cors)
-			(wrap-with-logger)
 		)
 	)
 )
