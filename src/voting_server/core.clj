@@ -328,7 +328,6 @@
 )
 
 (defn rules [db]
-	(println "In rules")
 	(let 
 		[
 			columns "max_papers,max_votes,max_votes_per_paper"
