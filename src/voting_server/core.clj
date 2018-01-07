@@ -336,7 +336,6 @@
 		]
 		{:body record}
 	)
-}
 )
 
 (defn return-user-list [db]
