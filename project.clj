@@ -15,6 +15,7 @@
 				[compojure "1.6.0"]
 				[bananaoomarang/ring-debug-logging "1.1.0"]
      ]
+  :min-lein-version "2.0.0"
   :main ^:skip-aot voting_server.core
   :aot [voting_server.core]
   :target-path "target/%s"
