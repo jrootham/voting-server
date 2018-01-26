@@ -541,7 +541,7 @@
   	[& args]
   	(if (== 0 (count args))
 		(let [url (get-env "JDBC_DATABASE_URL") 
-				portString (get-env "PORTFOO")]
+				portString (get-env "PORT")]
 			(if (and (some? url) (some? portString))
 				(try
 					(let [port (Integer/parseInt portString)]
