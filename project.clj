@@ -19,4 +19,5 @@
   :main ^:skip-aot voting_server.core
   :aot [voting_server.core]
   :target-path "target/%s"
+  :uberjar-name "voting-server.jar"
 )

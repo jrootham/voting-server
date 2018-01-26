@@ -95,7 +95,8 @@
 	(let [
 			columns "paper_id, title, link_id, paper_comment, created_at, users.name AS submitter"
 			from " FROM papers JOIN users ON papers.user_id = users.user_id"
-			query-string (str "SELECT " columns from " WHERE open_paper	;")
+			where " paper_id NOT IN (SELECT paper_id FROM closed)"
+			query-string (str "SELECT " columns from " WHERE" where	";")
 			result (query db [query-string])
 			map-fn (make-paper-apply db)
 		]
@@ -112,7 +113,7 @@
 		[
 			column "SUM(votes.votes) AS total_votes "
 			tables "papers JOIN votes ON papers.paper_id=votes.paper_id "
-			where "papers.open_paper AND votes.user_id=?;"
+			where "papers.paper_id NOT IN (SELECT paper_id FROM closed) AND votes.user_id=?;"
 			query-string (str "SELECT " column "FROM " tables "WHERE " where)
 			count-list (query db [query-string user-id])
 			vote-count (get (first count-list) :total_votes)
@@ -197,7 +198,7 @@
 
 			(if (> max (total-votes db user-id))
 				(vote-for-paper db user-id paper-id)
-				(return-error "User has voted for too many papers")
+				(return-error "User has used up his total votes")
 			)
 		)
 		(return-error  "User id not found")
@@ -300,14 +301,20 @@
 )
 
 (defn close-paper [db paper-id]
-	(update! db :papers {:open_paper false} ["paper_id = ?" paper-id])
-	(reload db)
+	(insert! db :closed {:paper_id paper-id})
+)
+
+(defn unclose-paper [db paper-id]
+	(delete! db :closed ["paper_id=?" paper-id])
 )
 
 (defn close [db user-id paper-id]
 	(if (some? user-id)
 		(if (== (get-owner db paper-id) user-id)
-			(close-paper db paper-id)
+			(
+				(close-paper db paper-id)
+				(reload db)
+			)
 			(return-error  "User did not submit paper")
 		)
 		(return-error  "Session not found")
@@ -341,16 +348,6 @@
 
 (defn return-user-list [db]
 	{:body {:user_list (query db ["SELECT user_id,name,valid,admin FROM users"])}}
-)
-
-(defn user-list [db admin]
-	(if (some? admin)
-		(if admin
-			(return-user-list db)
-			(return-error "User not an administrator")
-		)
-		(return-error  "Session not found")
-	)
 )
 
 (defn add-user [db user-record]
@@ -390,6 +387,69 @@
 	)
 )
 
+(defn return-open-list [db]
+	(let
+		[
+			id-column "papers.paper_id AS paper_id,"
+			title-column "papers.title AS title,"
+			comment-column "papers.paper_comment AS paper_comment,"
+			votes-column "coalesce(sum(votes.votes),0) AS total_votes "
+
+			columns (str "SELECT " id-column title-column comment-column votes-column)
+			
+			from "FROM papers LEFT OUTER JOIN votes ON papers.paper_id=votes.paper_id "
+
+			where "WHERE papers.paper_id NOT IN (SELECT paper_id FROM closed) "
+
+			group "GROUP BY papers.paper_id"
+		]
+
+		{:body {:paper_list (query db [(str columns from where group ";")])}}
+	)
+)
+
+(defn return-closed-list [db]
+	(let 
+		[
+			closed "closed.paper_id AS paper_id,closed.closed_at AS closed_at,"
+			paper "papers.title AS title,papers.paper_comment AS paper_comment"
+			columns (str closed paper)
+			tables "closed INNER JOIN papers ON closed.paper_id = papers.paper_id"
+		]
+		{:body {:paper_list (query db [(str "SELECT " columns " FROM " tables ";")])}}
+	)
+)
+
+(defn admin-close [db paper-id]
+	(close-paper db paper-id)
+	(return-open-list db)
+)
+
+(defn admin-unclose [db paper-id]
+	(unclose-paper db paper-id)
+	(return-closed-list db)
+)
+
+(defn admin-paper [action-fn db admin paper-id]
+	(if (some? admin)
+		(if admin
+			(action-fn db paper-id)
+			(return-error "User not an administrator")
+		)
+		(return-error  "Session not found")
+	)
+)
+
+(defn admin-list [list-fn db admin]
+	(if (some? admin)
+		(if admin
+			(list-fn db)
+			(return-error "User not an administrator")
+		)
+		(return-error  "Session not found")
+	)
+)
+
 (defroutes voting
 	(POST "/rules" [:as {db :connection}] (rules db))
 
@@ -409,10 +469,20 @@
 	(POST "/close" [:as {db :connection {paper-id "paper_id"} :body {user-id :user_id} :session}] 
 		(close db user-id paper-id))
 
-	(POST "/userList" [:as {db :connection {admin :admin} :session}] (user-list db admin))
+	(POST "/userList" [:as {db :connection {admin :admin} :session}] (admin-list return-user-list db admin))
 
 	(POST "/updateUser" [:as {db :connection {user "user"} :body {admin :admin} :session}] 
 		(update-user db admin user))
+
+	(POST "/openList" [:as {db :connection {admin :admin} :session}] (admin-list return-open-list db admin))
+
+	(POST "/adminClose" [:as {db :connection {paper-id "paper_id"} :body {admin :admin} :session}] 
+		(admin-paper admin-close db admin paper-id))
+
+	(POST "/closedList" [:as {db :connection {admin :admin} :session}] (admin-list return-closed-list db admin))
+
+	(POST "/adminUnclose" [:as {db :connection {paper-id "paper_id"} :body {admin :admin} :session}] 
+		(admin-paper admin-unclose db admin paper-id))
 )
 
 (defn make-wrap-db [db-url]
@@ -452,6 +522,7 @@
 			(wrap-json-response)
 			(wrap-session)
 			(cors)
+			(wrap-with-logger)
 		)
 	)
 )
@@ -474,6 +545,7 @@
 			(if (and (some? url) (some? portString))
 				(try
 					(let [port (Integer/parseInt portString)]
+						(println "port" port "url" url)
 						(run-jetty (make-handler url) {:port port})
 					)
 					(catch NumberFormatException exception 
