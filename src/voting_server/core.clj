@@ -335,15 +335,15 @@
 )
 
 (defn rules [db]
-	; (println "In rules")
-	; (let 
-	; 	[
-	; 		columns "max_papers,max_votes,max_votes_per_paper"
-	; 		query-string (str "SELECT " columns " FROM config WHERE config_id=1")
-	; 		record (first (query db [query-string]))
-	; 	]
-	; 	{:body record}
-	; )
+	(println "In rules")
+	(let 
+		[
+			columns "max_papers,max_votes,max_votes_per_paper"
+			query-string (str "SELECT " columns " FROM config WHERE config_id=1")
+			record (first (query db [query-string]))
+		]
+		{:body record}
+	)
 )
 
 (defn return-user-list [db]
