@@ -488,6 +488,7 @@
 (defn make-wrap-db [db-url]
 	(fn [handler]  
 		(fn [req]   
+			(println "In make-wrap-db")
 			(with-db-connection [db {:connection-uri db-url}]      
 				(handler (assoc req :connection db))
 			)
