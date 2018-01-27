@@ -485,12 +485,17 @@
 		(admin-paper admin-unclose db admin paper-id))
 )
 
+(defn do-log [value]
+	(println value)
+	value
+)
+
 (defn make-wrap-db [db-url]
 	(fn [handler]  
 		(fn [req]   
 			(println "In make-wrap-db" db-url)
 			(with-db-connection [db {:connection-uri db-url}]      
-				(handler (assoc req :connection db))
+				(do-log (handler (assoc req :connection db)))
 			)
 		)
 	)
