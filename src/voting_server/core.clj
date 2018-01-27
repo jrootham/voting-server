@@ -486,7 +486,7 @@
 )
 
 (defn do-log [value]
-	(println value)
+	(println "logging" value)
 	value
 )
 
