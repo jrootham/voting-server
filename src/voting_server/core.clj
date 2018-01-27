@@ -523,7 +523,7 @@
 			(wrap-json-response)
 			(wrap-session)
 			(cors)
-			(wrap-with-logger)
+;			(wrap-with-logger)
 		)
 	)
 )
