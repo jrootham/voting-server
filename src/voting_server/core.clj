@@ -335,7 +335,6 @@
 )
 
 (defn rules [db]
-	(println "In rules")
 	(let 
 		[
 			columns "max_papers,max_votes,max_votes_per_paper"
@@ -450,6 +449,38 @@
 	)
 )
 
+(defn make-rules-record [rules]
+	{
+		:max_papers (get rules "max_papers")
+		:max_votes (get rules "max_votes")
+		:max_votes_per_paper (get rules "max_per_paper")
+	}
+)
+
+(defn good-rules [db record]
+	(update! db :config record ["config_id=1"])
+	{:body record}
+)
+
+(defn replace-rules [db rules]
+	(let [record (make-rules-record rules)]
+		(if ( >= (get record :max_votes) (get record :max_votes_per_paper))
+			(good-rules db record)
+			(return-error "Max votes cannot be less than max votes per paper")
+		)
+	)
+)
+
+(defn update-rules [db rules admin]
+	(if (some? admin)
+		(if admin
+			(replace-rules db rules)
+			(return-error "User not an administrator")
+		)
+		(return-error  "Session not found")
+	)
+)
+
 (defroutes voting
 	(POST "/rules" [:as {db :connection}] (rules db))
 
@@ -483,19 +514,16 @@
 
 	(POST "/adminUnclose" [:as {db :connection {paper-id "paper_id"} :body {admin :admin} :session}] 
 		(admin-paper admin-unclose db admin paper-id))
-)
 
-(defn do-log [value]
-	(println "logging" value)
-	value
+	(POST "/updateRules" [:as {db :connection {rules "rules"} :body {admin :admin} :session}]
+		(update-rules db rules admin))
 )
 
 (defn make-wrap-db [db-url]
 	(fn [handler]  
 		(fn [req]   
-			(println "In make-wrap-db" db-url)
 			(with-db-connection [db {:connection-uri db-url}]      
-				(do-log (handler (assoc req :connection db)))
+				(handler (assoc req :connection db))
 			)
 		)
 	)
@@ -551,7 +579,6 @@
 			(if (and (some? url) (some? portString))
 				(try
 					(let [port (Integer/parseInt portString)]
-						(println "port" port "url" url)
 						(run-jetty (make-handler url) {:port port})
 					)
 					(catch NumberFormatException exception 
