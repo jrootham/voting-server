@@ -23,6 +23,7 @@
 )
 
 (defn return-error [message]
+	(println message)
 	{:status 400 :body message}
 )
 
@@ -556,7 +557,7 @@
 			(wrap-json-response)
 			(wrap-session)
 			(cors)
-;			(wrap-with-logger)
+			(wrap-with-logger)
 		)
 	)
 )
