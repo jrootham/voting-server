@@ -347,7 +347,10 @@
 )
 
 (defn return-user-list [db]
-	{:body {:user_list (query db ["SELECT user_id,name,valid,admin FROM users"])}}
+	(let [result {:body {:user_list (query db ["SELECT user_id,name,valid,admin FROM users"])}}]
+		(println "Got usre list")
+		result
+	)
 )
 
 (defn add-user [db user-record]
@@ -357,6 +360,7 @@
 
 (defn change-user [db user-id user-record]
 	(update! db :users user-record ["user_id=?" user-id])
+	(println "after update user")
 	(return-user-list db)
 )
 
@@ -369,6 +373,7 @@
 )
 
 (defn edit-user [db user]
+	(println "start edit-user")
 	(let [user-id (get user "user_id")]
 		(if (= user-id 0)
 			(add-user db (make-user-record user))
