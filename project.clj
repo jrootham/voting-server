@@ -9,7 +9,7 @@
 				[com.unbounce/encors "2.3.0"]
 				[ring/ring-json "0.4.0"]
 				[org.clojure/clojure "1.8.0"]
-				[postgresql "9.3-1102.jdbc41"]
+				[org.postgresql/postgresql "9.4-1206-jdbc41"]
 				[org.clojure/java.jdbc "0.7.1"]
 				[org.clojure/data.json "0.2.6"]
 				[compojure "1.6.0"]

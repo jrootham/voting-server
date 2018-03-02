@@ -23,7 +23,6 @@
 )
 
 (defn return-error [message]
-	(println message)
 	{:status 400 :body message}
 )
 
