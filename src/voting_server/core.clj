@@ -308,13 +308,15 @@
 	(delete! db :closed ["paper_id=?" paper-id])
 )
 
+(defn user-close [db paper-id]
+	(close-paper db paper-id)
+	(reload db)
+)
+
 (defn close [db user-id paper-id]
 	(if (some? user-id)
 		(if (== (get-owner db paper-id) user-id)
-			(
-				(close-paper db paper-id)
-				(reload db)
-			)
+			(user-close db paper-id)
 			(return-error  "User did not submit paper")
 		)
 		(return-error  "Session not found")
@@ -346,10 +348,7 @@
 )
 
 (defn return-user-list [db]
-	(let [result {:body {:user_list (query db ["SELECT user_id,name,valid,admin FROM users"])}}]
-		(println "Got usre list")
-		result
-	)
+	{:body {:user_list (query db ["SELECT user_id,name,valid,admin FROM users"])}}
 )
 
 (defn add-user [db user-record]
@@ -359,7 +358,6 @@
 
 (defn change-user [db user-id user-record]
 	(update! db :users user-record ["user_id=?" user-id])
-	(println "after update user")
 	(return-user-list db)
 )
 
@@ -372,7 +370,6 @@
 )
 
 (defn edit-user [db user]
-	(println "start edit-user")
 	(let [user-id (get user "user_id")]
 		(if (= user-id 0)
 			(add-user db (make-user-record user))
@@ -528,7 +525,6 @@
 	(fn [handler]  
 		(fn [req]   
 			(with-db-connection [db {:connection-uri db-url}]
-				(println db)
 				(handler (assoc req :connection db))
 			)
 		)
@@ -562,7 +558,7 @@
 			(wrap-json-response)
 			(wrap-session)
 			(cors)
-			(wrap-with-logger)
+;			(wrap-with-logger)
 		)
 	)
 )
