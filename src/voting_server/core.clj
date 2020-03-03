@@ -1,15 +1,21 @@
 (ns voting_server.core
   (:gen-class)
-	(:require [com.unbounce.encors :refer [wrap-cors]])
 	(:use ring.adapter.jetty)
-	(:require [ring.middleware.json :refer [wrap-json-response wrap-json-body]]
-         [ring.util.response :refer [response]])
+	(:require [ring.middleware.json :refer [wrap-json-response wrap-json-body]])
+  (:require [ring.util.response :refer [response]])
 	(:require [ring.middleware.session :refer[wrap-session]])
 	(:require [compojure.core :refer :all])
 	(:require [clojure.java.jdbc :refer :all :as jdbc])
 	(:use clojure.java.jdbc)
 	(:require [clojure.string :as str])
 	(:require [ring-debug-logging.core :refer [wrap-with-logger]])
+	(:require [compojure.route :as route])
+	(:require [voting_server.stuff :as stuff])
+)
+
+(defn debug [x] 
+	(println x)
+	x
 )
 
 (defn get-owner [db paper-id]
@@ -337,11 +343,13 @@
 )
 
 (defn rules [db]
+(println "In rules")
+(println db)
 	(let 
 		[
 			columns "max_papers,max_votes,max_votes_per_paper"
 			query-string (str "SELECT " columns " FROM config WHERE config_id=1")
-			record (first (query db [query-string]))
+			record (debug (first (debug (query stuff/db-spec [query-string]))))
 		]
 		{:body record}
 	)
@@ -484,111 +492,83 @@
 )
 
 (defroutes voting
-	(POST "/rules" [:as {db :connection}] (rules db))
+	(POST "/servers/voting/rules" [:as {db :connection}] (rules db))
 
-	(POST "/login" [:as {db :connection {user "user"} :body}] (login db user))
+	(POST "/servers/voting/login" [:as {db :connection {user "user"} :body}] (login db user))
 
-	(POST "/reload" [:as {db :connection}] (reload db))
+	(POST "/servers/voting/reload" [:as {db :connection}] (reload db))
 
-	(POST "/save" [:as {db :connection {paper "paper"} :body {user-id :user_id} :session}] 
+	(POST "/servers/voting/save" [:as {db :connection {paper "paper"} :body {user-id :user_id} :session}] 
 		(edit-paper db user-id paper))
 
-	(POST "/vote" [:as {db :connection {paper-id "paper_id"} :body {user-id :user_id} :session}] 
+	(POST "/servers/voting/vote" [:as {db :connection {paper-id "paper_id"} :body {user-id :user_id} :session}] 
 		(vote db user-id paper-id))
 
-	(POST "/unvote" [:as {db :connection {paper-id "paper_id"} :body {user-id :user_id} :session}] 
+	(POST "/servers/voting/unvote" [:as {db :connection {paper-id "paper_id"} :body {user-id :user_id} :session}] 
 		(unvote db user-id paper-id))
 
-	(POST "/close" [:as {db :connection {paper-id "paper_id"} :body {user-id :user_id} :session}] 
+	(POST "/servers/voting/close" [:as {db :connection {paper-id "paper_id"} :body {user-id :user_id} :session}] 
 		(close db user-id paper-id))
 
-	(POST "/userList" [:as {db :connection {admin :admin} :session}] (admin-list return-user-list db admin))
+	(POST "/servers/voting/userList" [:as {db :connection {admin :admin} :session}] 
+		(admin-list return-user-list db admin))
 
-	(POST "/updateUser" [:as {db :connection {user "user"} :body {admin :admin} :session}] 
+	(POST "/servers/voting/updateUser" [:as {db :connection {user "user"} :body {admin :admin} :session}] 
 		(update-user db admin user))
 
-	(POST "/openList" [:as {db :connection {admin :admin} :session}] (admin-list return-open-list db admin))
+	(POST "/servers/voting/openList" [:as {db :connection {admin :admin} :session}] (admin-list return-open-list db admin))
 
-	(POST "/adminClose" [:as {db :connection {paper-id "paper_id"} :body {admin :admin} :session}] 
+	(POST "/servers/voting/adminClose" [:as {db :connection {paper-id "paper_id"} :body {admin :admin} :session}] 
 		(admin-paper admin-close db admin paper-id))
 
-	(POST "/closedList" [:as {db :connection {admin :admin} :session}] (admin-list return-closed-list db admin))
+	(POST "/servers/voting/closedList" [:as {db :connection {admin :admin} :session}] (admin-list return-closed-list db admin))
 
-	(POST "/adminUnclose" [:as {db :connection {paper-id "paper_id"} :body {admin :admin} :session}] 
+	(POST "/servers/voting/adminUnclose" [:as {db :connection {paper-id "paper_id"} :body {admin :admin} :session}] 
 		(admin-paper admin-unclose db admin paper-id))
 
-	(POST "/updateRules" [:as {db :connection {rules "rules"} :body {admin :admin} :session}]
+	(POST "/servers/voting/updateRules" [:as {db :connection {rules "rules"} :body {admin :admin} :session}]
 		(update-rules db rules admin))
+
+	(route/not-found {:status 404 :body "Page not found"})
+
 )
 
-(defn make-wrap-db [db-url]
+(defn make-wrap-db [db-spec]
 	(fn [handler]  
 		(fn [req]   
-			(with-db-connection [db {:connection-uri db-url}]
-				(handler (assoc req :connection db))
+			(with-db-transaction [db db-spec]
+				(handler (debug (assoc req :connection db)))
 			)
 		)
 	)
 )
 
-(defn cors [handler]
-	(let [cors-policy
-		    { 
-		    	:allowed-origins :match-origin
-				:allowed-methods #{:post}
-				:request-headers #{"Accept" "Content-Type" "Origin"}
-				:exposed-headers nil
-				:allow-credentials? true
-				:origin-varies? false
-				:max-age nil
-				:require-origin? true
-				:ignore-failures? false
-		    }
-     	]
-
-     	(wrap-cors handler cors-policy)
-     )
-)
-
-(defn make-handler [db-url] 
-	(let [wrap-db (make-wrap-db db-url)] 
+(defn make-handler [db-spec] 
+	(let [wrap-db (make-wrap-db db-spec)] 
 		(-> voting
 			(wrap-db)
 			(wrap-json-body)
 			(wrap-json-response)
 			(wrap-session)
-			(cors)
-;			(wrap-with-logger)
+			(wrap-with-logger)
 		)
-	)
-)
-
-(defn get-env [name]
-	(let [value (System/getenv name)]
-		(if (nil? value)
-			(println (str "Evironment variable " name " is undefined"))
-		)
-		value
 	)
 )
 
 (defn -main
   	"Cabal voting server"
   	[& args]
-  	(if (== 0 (count args))
-		(let [url (get-env "JDBC_DATABASE_URL") 
-				portString (get-env "PORT")]
-			(if (and (some? url) (some? portString))
+  	(if (== 1 (count args))
+			(let [portString (first args)]
 				(try
 					(let [port (Integer/parseInt portString)]
-						(run-jetty (make-handler url) {:port port})
+						(run-jetty (make-handler stuff/db-spec) {:port port})
 					)
 					(catch NumberFormatException exception 
 						(println (str portString " is not an int"))
 					)
 				)
-			)
-		)  	
-	  	(println "This programme has no arguments")
+			)  	
+			(println "voting-server port")
 	)
- )
+)
